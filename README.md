@@ -1,17 +1,24 @@
 # colorscheme-convert
 
-Recolor any image into a terminal/editor color scheme. Ships with 13 schemes and
-reads your own from JSON. All color matching happens in **Oklab**, so "nearest
-color" means nearest as the eye sees it rather than nearest in the RGB cube.
+Recolor any image to match your terminal or editor color scheme — wallpapers,
+screenshots, diagrams. Ships with 13 schemes and reads your own from JSON.
 
-## Setup
+Colors are matched in [Oklab](https://bottosson.github.io/posts/oklab/), so
+"closest color" means closest as the eye sees it rather than closest in the RGB
+cube. That is the difference between a recolored image that looks right and one
+where the greens go muddy.
+
+## Install
+
+Needs Python 3.9+.
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+git clone https://github.com/NotebookNomad/colorscheme-convert
+cd colorscheme-convert
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-## Usage
+## Use
 
 ```sh
 .venv/bin/python convert.py wallpaper.png
@@ -21,45 +28,41 @@ python3 -m venv .venv
 # -> wallpaper-gruvbox-dark.png
 ```
 
+Pass several images to convert them in one go. Alpha channels are preserved.
+
+Two flags cover most of what you'll want:
+
 ```sh
-convert.py [-o OUT] [-t THEME | --theme-file PATH] [--list-themes]
-           [-m nearest|blend|gradient] [-d none|bayer|floyd]
-           [-k 0..1] [-b B] [-c W] [-s S] [--ramp neutral|all]
-           [--full-palette] [--no-normalize] [--show-palette] IMAGE [IMAGE ...]
+-t nord      # pick a scheme      (--list-themes shows them all)
+-b 0.7       # darker; -b 1.4 lighter
 ```
 
-Multiple inputs are converted in one pass (each gets an auto-named output);
-`-o` is for a single input. Alpha channels pass through untouched.
+Try it on `sample.png`, a built-in test chart, to see what a scheme does to a
+full range of hues and lightnesses.
 
 ## Themes
 
-`--list-themes` shows what's available and where each one came from.
+`tokyonight-night` *(default)* · `tokyonight-storm` · `tokyonight-moon` ·
+`tokyonight-day` · `gruvbox-dark` · `gruvbox-light` · `catppuccin-mocha` ·
+`catppuccin-latte` · `nord` · `dracula` · `solarized` · `rose-pine` ·
+`everforest-dark`
 
-| | |
-| --- | --- |
-| Tokyo Night | `tokyonight-night` *(default)*, `tokyonight-storm`, `tokyonight-moon`, `tokyonight-day` |
-| Gruvbox | `gruvbox-dark`, `gruvbox-light` |
-| Catppuccin | `catppuccin-mocha`, `catppuccin-latte` |
-| Others | `nord`, `dracula`, `solarized`, `rose-pine`, `everforest-dark` |
+`--show-palette -t nord` prints a scheme's colors and writes a swatch image.
 
 ### Adding your own
 
-Drop a `.json` file in `~/.config/colorscheme-convert/themes/` (or
-`$XDG_CONFIG_HOME/colorscheme-convert/themes/`). The filename is the theme name,
-so `synthwave.json` becomes `-t synthwave`. A user theme shadows a built-in of
-the same name, so you can override any of the above. `--theme-file path.json`
-loads one directly without installing it.
+Drop a `.json` file into `~/.config/colorscheme-convert/themes/`. The filename
+is the theme name, so `synthwave.json` becomes `-t synthwave`. Naming it after a
+built-in overrides that built-in. To try one without installing it, use
+`--theme-file path.json`.
 
-Built-in themes live in `themes/` and use the exact same format — copy one as a
-starting point. Three shapes are accepted, smallest first:
+The simplest theme is a list of colors:
 
 ```json
 ["#0b0f14", "#1b262c", "#3a5a6c", "#7fa1b3", "#c9d6db", "#e85d75", "#f0a35e"]
 ```
 
-```json
-{ "ink": "#12121a", "slate": "#2b2b3a", "ash": "#8a8a9e", "rust": "#c65f3f" }
-```
+Naming them is optional, and lets you add two hints:
 
 ```json
 {
@@ -69,98 +72,75 @@ starting point. Three shapes are accepted, smallest first:
 }
 ```
 
-Both `#rgb` and `#rrggbb` are accepted. The two optional keys:
+- **`ramp`** — the dark-to-light neutral spine used by `-m gradient`. Leave it
+  out and one is worked out for you from the least saturated colors.
+- **`exclude`** — colors to skip when matching. Useful for shades that sit almost
+  on top of another one and only add banding. `--full-palette` puts them back.
 
-- **`ramp`** — the neutral dark-to-light spine used by `-m gradient`. Omit it and
-  one is derived automatically by picking the palette's least saturated colors
-  and sorting them by lightness, which is usually right; declare it when you
-  want specific stops.
-- **`exclude`** — colors to drop from matching by default, for shades that sit so
-  close to another entry that they only add banding. `--full-palette` puts them
-  back. Omit it and every color is used.
+Both `#rgb` and `#rrggbb` work. The files in `themes/` use this same format, so
+copying one is the easiest way to start.
 
 ## Methods
 
-| `-m` | What it does | Good for |
+| `-m` | What it does | Best for |
 | --- | --- | --- |
-| `nearest` *(default)* | Hard-quantizes every pixel to its closest palette color. Output contains **only** scheme colors. | Wallpapers, UI screenshots, the flat poster look |
-| `blend` | Softmax-weighted mix of nearby palette colors. Smooth, no banding, but colors are off-palette. | Photographs, gradients |
-| `gradient` | Classic gradient map: source lightness indexes the scheme's neutral dark→light ramp. | Monochrome, tinted look |
+| `nearest` *(default)* | Snaps every pixel to the closest scheme color. Output contains **only** scheme colors. | Wallpapers, screenshots, a flat poster look |
+| `blend` | Mixes nearby scheme colors. Smooth, but goes off-palette. | Photographs, gradients |
+| `gradient` | Maps lightness onto the scheme's neutral ramp. | A monochrome, tinted look |
 
-## Tuning
+## Options
 
-- **`-d`, `--dither`** (with `-m nearest`) — `bayer` for a clean ordered
-  crosshatch, `floyd` for error diffusion. Dithering trades hard color bands
-  for texture and keeps the output strictly on-palette.
-- **`-k`, `--keep-lightness`** `0..1` — mixes the original lightness back into
-  the result, restoring detail that quantizing flattened. `0.4`–`0.6` rescues
-  a photo that came out too posterized. Note this pulls pixels off-palette, and
-  that it has no effect under `-d floyd`, which quantizes in sRGB.
-- **`-b`, `--brightness`** — bends the tone curve before palette matching, so it
-  steers *which* palette colors get picked rather than washing out the result
-  afterwards. Below `1.0` darkens, above `1.0` lightens; `0.6`–`0.8` is the fix
-  when output comes out too light. Endpoints stay put, so the full tonal range
-  is still used.
-- **`-c`, `--chroma-weight`** — below `1.0` matches mostly on lightness (safer,
-  more neutral); above `1.0` chases hue and gets more colorful.
-- **`-s`, `--softness`** (with `-m blend`) — mix radius. Smaller is punchier and
-  closer to the palette, larger is smoother and more washed out.
-- **`--ramp all`** (with `-m gradient`) — index every palette color by lightness
-  instead of the neutral spine. Produces a deliberate rainbow banding effect.
-- **`--no-normalize`** — by default the source lightness range is stretched onto
-  the palette's range, so a bright photo doesn't collapse into the scheme's
-  handful of light colors. Disable to preserve absolute exposure.
-- **`--full-palette`** — include the shades a theme lists under `exclude`.
+| Flag | Effect |
+| --- | --- |
+| `-o PATH` | Output path (one input image only) |
+| `-t NAME` | Scheme to use |
+| `--theme-file PATH` | Use a scheme from a JSON file |
+| `--list-themes` | Show available schemes |
+| `-m METHOD` | `nearest`, `blend`, or `gradient` |
+| `-d KIND` | Dither: `bayer` (ordered) or `floyd` (error diffusion). Trades hard color bands for texture, staying on-palette. `nearest` only |
+| `-b N` | Brightness. Below `1.0` darkens, above lightens |
+| `-k 0..1` | Keeps some of the original lightness, restoring detail that snapping flattened. `0.4`–`0.6` suits photos. Goes off-palette |
+| `-c N` | Below `1.0` matches on lightness (calmer), above chases hue (more colorful) |
+| `-s N` | Mix radius for `blend`. Smaller is punchier, larger is smoother |
+| `--ramp all` | Gradient-map over every color instead of the neutral spine, for deliberate rainbow banding |
+| `--full-palette` | Also match against a theme's `exclude` colors |
+| `--no-normalize` | Keep the image's original exposure instead of stretching it across the scheme's lightness range |
+| `--show-palette` | Print a scheme and write a swatch image |
 
 ## Recipes
 
 ```sh
-# Output came out too light — darken it
-.venv/bin/python convert.py wall.png -b 0.7
-
-# Wallpaper, strictly on-palette, softened banding
+# Wallpaper, on-palette, softened banding
 .venv/bin/python convert.py wall.png -d bayer
 
 # Photo that keeps its detail
 .venv/bin/python convert.py photo.png -m blend -k 0.5 -s 0.06
 
-# Pixel art / low-color source
+# Pixel art
 .venv/bin/python convert.py sprite.png -d floyd -t gruvbox-dark
 
-# Light-theme version
-.venv/bin/python convert.py diagram.png -t catppuccin-latte
-
-# Try a palette without installing it
-.venv/bin/python convert.py photo.png --theme-file ~/Downloads/palette.json
-
-# Inspect a scheme (prints hex values, writes swatch-nord.png)
-.venv/bin/python convert.py --show-palette -t nord
+# Darker result
+.venv/bin/python convert.py wall.png -b 0.7
 ```
 
-`sample.png` is a synthetic hue/lightness test chart — useful for comparing
-options side by side.
-
-## Using it as a library
+## As a library
 
 ```python
 from PIL import Image
 from convert import convert_image, resolve_palette
-from theme import get_theme, load_theme_file
+from theme import get_theme
 
-pal, ramp = resolve_palette(get_theme("catppuccin-mocha"))
-out = convert_image(Image.open("in.png"), pal, ramp_rgb=ramp,
+palette, ramp = resolve_palette(get_theme("catppuccin-mocha"))
+out = convert_image(Image.open("in.png"), palette, ramp_rgb=ramp,
                     method="blend", keep_lightness=0.4)
 out.save("out.png")
 ```
 
-`load_theme_file(Path(...))` loads a scheme from disk by path. `convert_image` /
-`convert_array` take the same keywords as the flags above and raise `ValueError`
-on an unusable combination; theme loading raises `ValueError` on an unknown name
-or malformed file.
+`convert_image` and `convert_array` take the same options as the flags above.
 
-## Accuracy note
+## Notes
 
-Tokyo Night values follow the reference implementation of
-[folke/tokyonight.nvim](https://github.com/folke/tokyonight.nvim). The other
-schemes were transcribed from their published palettes; if you spot a hex that
-drifts from upstream, it's a one-line fix in `themes/`.
+Tokyo Night values follow
+[folke/tokyonight.nvim](https://github.com/folke/tokyonight.nvim); the other
+schemes were transcribed from their published palettes. They are plain JSON in
+`themes/`, so a wrong hex is a one-line fix — corrections welcome.

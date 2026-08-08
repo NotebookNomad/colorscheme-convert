@@ -273,7 +273,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "-t",
         "--theme",
-        "--variant",
         dest="theme",
         default=DEFAULT_THEME,
         metavar="NAME",
@@ -321,8 +320,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         metavar="B",
-        help="<1 darkens, >1 lightens; 0.6-0.8 is a good first try for output "
-        "that came out too light (default: 1.0)",
+        help="<1 darkens, >1 lightens; 0.6-0.8 darkens noticeably "
+        "(default: 1.0)",
     )
     p.add_argument(
         "-c",
@@ -350,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--full-palette",
         action="store_true",
-        help="include the near-duplicate UI chrome shades",
+        help="also match against the shades a theme lists under 'exclude'",
     )
     p.add_argument(
         "--no-normalize",
