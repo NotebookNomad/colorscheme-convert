@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Recolor an image into the Tokyo Night colorscheme.
+"""Recolor an image into a terminal/editor color scheme.
 
-    ./convert.py photo.png -o photo-tokyonight.png
+    ./convert.py photo.png -t gruvbox-dark
 
 All color math happens in Oklab so that "nearest color" means nearest as the
 eye sees it, not nearest in RGB cube distance.
@@ -17,12 +17,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from palettes import (
+from oklab import oklab_from_u8, u8_from_oklab
+from theme import (
     DEFAULT_THEME,
     Theme,
     get_theme,
     list_themes,
     load_theme_file,
+    rgb_array,
     rgb_to_hex,
     user_dir,
 )
@@ -34,70 +36,6 @@ RAMPS = ("neutral", "all")
 # Pixels per batch. Sized so a batch's (pixels, palette) distance block stays
 # cache-resident; larger batches measure no faster and cost real memory.
 CHUNK = 1 << 16
-
-# ---------------------------------------------------------------------------
-# color space
-# ---------------------------------------------------------------------------
-
-_LMS_FROM_LRGB = np.array(
-    [
-        [0.4122214708, 0.5363325363, 0.0514459929],
-        [0.2119034982, 0.6806995451, 0.1073969566],
-        [0.0883024619, 0.2817188376, 0.6299787005],
-    ]
-)
-_OKLAB_FROM_LMS = np.array(
-    [
-        [0.2104542553, 0.7936177850, -0.0040720468],
-        [1.9779984951, -2.4285922050, 0.4505937099],
-        [0.0259040371, 0.7827717662, -0.8086757660],
-    ]
-)
-_LMS_FROM_OKLAB = np.array(
-    [
-        [1.0, 0.3963377774, 0.2158037573],
-        [1.0, -0.1055613458, -0.0638541728],
-        [1.0, -0.0894841775, -1.2914855480],
-    ]
-)
-_LRGB_FROM_LMS = np.array(
-    [
-        [4.0767416621, -3.3077115913, 0.2309699292],
-        [-1.2684380046, 2.6097574011, -0.3413193965],
-        [-0.0041960863, -0.7034186147, 1.7076147010],
-    ]
-)
-
-
-def srgb_to_linear(c: np.ndarray) -> np.ndarray:
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-
-
-def linear_to_srgb(c: np.ndarray) -> np.ndarray:
-    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.clip(c, 0, None) ** (1 / 2.4) - 0.055)
-
-
-# Every image and palette entering the pipeline is 8-bit, so the transfer
-# function only ever sees 256 distinct values: tabulate it once.
-_LINEAR_FROM_U8 = srgb_to_linear(np.arange(256) / 255.0)
-
-
-def oklab_from_u8(rgb8: np.ndarray) -> np.ndarray:
-    """(..., 3) uint8 sRGB -> (..., 3) Oklab."""
-    lms = _LINEAR_FROM_U8[rgb8] @ _LMS_FROM_LRGB.T
-    return np.cbrt(lms) @ _OKLAB_FROM_LMS.T
-
-
-def oklab_to_rgb(lab: np.ndarray) -> np.ndarray:
-    """(..., 3) Oklab -> (..., 3) sRGB clipped to [0, 1]."""
-    lms = lab @ _LMS_FROM_OKLAB.T
-    linear = (lms**3) @ _LRGB_FROM_LMS.T
-    return np.clip(linear_to_srgb(linear), 0.0, 1.0)
-
-
-def u8_from_oklab(lab: np.ndarray) -> np.ndarray:
-    """(..., 3) Oklab -> (..., 3) uint8 sRGB."""
-    return np.rint(oklab_to_rgb(lab) * 255.0).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +231,7 @@ def convert_image(image: Image.Image, pal_rgb: np.ndarray, **kwargs) -> Image.Im
 
 
 def palette_swatch(pal_rgb: np.ndarray, cell: int = 64) -> Image.Image:
-    """A strip of the palette, handy for eyeballing a variant."""
+    """A strip of the palette, handy for eyeballing a scheme."""
     cols = min(len(pal_rgb), 8)
     rows = (len(pal_rgb) + cols - 1) // cols
     grid = np.zeros((rows * cols, 3), dtype=np.uint8)
@@ -302,38 +240,13 @@ def palette_swatch(pal_rgb: np.ndarray, cell: int = 64) -> Image.Image:
     return Image.fromarray(np.repeat(np.repeat(grid, cell, 0), cell, 1), "RGB")
 
 
-def derive_ramp(pal_rgb: np.ndarray) -> np.ndarray:
-    """Pick a neutral dark-to-light spine out of an arbitrary palette.
-
-    Gradient mapping wants low-chroma colors — run it over a theme's accents
-    and you get rainbow banding. Themes may declare a ``ramp`` explicitly; this
-    is the fallback for those that don't.
-    """
-    lab = oklab_from_u8(pal_rgb)
-    chroma = np.hypot(lab[:, 1], lab[:, 2])
-    keep = chroma <= max(0.04, float(np.median(chroma)) * 0.6)
-    if keep.sum() < 3:
-        # Palette has no real neutrals; take the least saturated colors anyway.
-        keep = np.zeros(len(lab), dtype=bool)
-        keep[np.argsort(chroma)[:5]] = True
-    idx = np.flatnonzero(keep)
-    return pal_rgb[idx[np.argsort(lab[idx, 0])]]
-
-
 def resolve_palette(
     theme: Theme, *, full: bool = False, ramp: str = "neutral"
-) -> tuple[np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Turn a Theme into the (palette, ramp) uint8 arrays the pipeline wants."""
-    pal_rgb = np.array([rgb for _, rgb in theme.entries(full=full)], dtype=np.uint8)
-    if ramp == "all":
-        return pal_rgb, None
-    # Ramps resolve against every color the theme defines, including any the
-    # palette drops, since the excluded shades are exactly the neutral ones.
-    declared = theme.ramp()
-    if declared is not None:
-        return pal_rgb, np.array(declared, dtype=np.uint8)
-    all_rgb = np.array([rgb for _, rgb in theme.colors], dtype=np.uint8)
-    return pal_rgb, derive_ramp(all_rgb)
+    pal_rgb = rgb_array(rgb for _, rgb in theme.entries(full=full))
+    # "all" gradient-maps over the whole palette instead of the neutral spine.
+    return pal_rgb, pal_rgb if ramp == "all" else rgb_array(theme.ramp)
 
 
 def default_output(path: Path, theme: str) -> Path:
@@ -343,7 +256,7 @@ def default_output(path: Path, theme: str) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="convert.py",
-        description="Recolor an image into the Tokyo Night colorscheme.",
+        description="Recolor an image into a terminal/editor color scheme.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
@@ -475,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
         for role, rgb in entries:
             print(f"{role:>15}  {rgb_to_hex(rgb)}  {rgb}")
         out = Path(f"swatch-{theme.name}.png")
-        palette_swatch(np.array([rgb for _, rgb in entries], dtype=np.uint8)).save(out)
+        palette_swatch(rgb_array(rgb for _, rgb in entries)).save(out)
         print(f"\n{len(entries)} colors -> {out}")
         return 0
 

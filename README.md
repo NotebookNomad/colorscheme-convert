@@ -145,7 +145,7 @@ options side by side.
 ```python
 from PIL import Image
 from convert import convert_image, resolve_palette
-from palettes import get_theme, load_theme_file
+from theme import get_theme, load_theme_file
 
 pal, ramp = resolve_palette(get_theme("catppuccin-mocha"))
 out = convert_image(Image.open("in.png"), pal, ramp_rgb=ramp,

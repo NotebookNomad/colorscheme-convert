@@ -1,5 +1,5 @@
 .venv/
 __pycache__/
-*-tokyonight-*.png
+sample-*.png
 swatch-*.png
 .claude/settings.local.json

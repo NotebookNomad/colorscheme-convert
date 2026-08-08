@@ -21,16 +21,22 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
+
+import oklab
 
 DEFAULT_THEME = "tokyonight-night"
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "themes"
 
-# Theme names become part of an output filename, so keep them to boring
-# characters — no directory separators, no leading dot or dash, so a name can
-# neither reach into another directory nor be mistaken for a CLI flag.
+# A theme name is a lookup key derived from a file stem, and it also becomes
+# part of an output filename. Both jobs want it boring: no directory
+# separators, and no leading dot or dash to be mistaken for a hidden file or a
+# CLI flag.
 _SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 Rgb = tuple[int, int, int]
@@ -42,13 +48,22 @@ def hex_to_rgb(value: str) -> Rgb:
     text = value.lstrip("#")
     if len(text) == 3:
         text = "".join(ch * 2 for ch in text)
-    if len(text) != 6 or not all(ch in "0123456789abcdefABCDEF" for ch in text):
-        raise ValueError(f"not a hex color: {value!r}")
-    return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    try:
+        if len(text) != 6:
+            raise ValueError
+        r, g, b = bytes.fromhex(text)
+    except ValueError:
+        raise ValueError(f"not a hex color: {value!r}") from None
+    return r, g, b
 
 
 def rgb_to_hex(rgb: Rgb) -> str:
     return "#%02x%02x%02x" % tuple(int(c) for c in rgb)
+
+
+def rgb_array(colors: Iterable[Rgb]) -> np.ndarray:
+    """(N, 3) uint8 — the shape every mapping function expects."""
+    return np.array(list(colors), dtype=np.uint8)
 
 
 @dataclass(frozen=True)
@@ -57,9 +72,8 @@ class Theme:
 
     name: str
     colors: tuple[tuple[str, Rgb], ...]
-    ramp_roles: tuple[str, ...]
+    ramp: tuple[Rgb, ...]
     exclude: frozenset[str]
-    source: Path | None = None
 
     def entries(self, *, full: bool = False) -> list[tuple[str, Rgb]]:
         """Colors to map against, as [(role, rgb), ...].
@@ -68,20 +82,27 @@ class Theme:
         entry that keeping them only adds banding on photographic input; they
         are dropped unless ``full`` is set.
         """
-        if full or not self.exclude:
-            return list(self.colors)
-        return [(role, rgb) for role, rgb in self.colors if role not in self.exclude]
+        drop = frozenset() if full else self.exclude
+        return [(role, rgb) for role, rgb in self.colors if role not in drop]
 
-    def ramp(self) -> list[Rgb] | None:
-        """The dark-to-light neutral spine for gradient mapping.
 
-        ``None`` when the theme declares no ramp, in which case the caller
-        derives one from the colors themselves.
-        """
-        if not self.ramp_roles:
-            return None
-        lookup = dict(self.colors)
-        return [lookup[role] for role in self.ramp_roles]
+def derive_ramp(colors: Iterable[Rgb]) -> tuple[Rgb, ...]:
+    """Pick a neutral dark-to-light spine out of an arbitrary palette.
+
+    Gradient mapping wants low-chroma colors — run it over a theme's accents
+    and you get rainbow banding. This is what a theme gets when it declares no
+    ``ramp`` of its own.
+    """
+    rgb = rgb_array(colors)
+    lab = oklab.oklab_from_u8(rgb)
+    chroma = oklab.chroma(lab)
+    keep = chroma <= max(0.04, float(np.median(chroma)) * 0.6)
+    if keep.sum() < 3:
+        # Palette has no real neutrals; take the least saturated colors anyway.
+        keep = np.zeros(len(lab), dtype=bool)
+        keep[np.argsort(chroma)[:5]] = True
+    idx = np.flatnonzero(keep)
+    return tuple(tuple(int(v) for v in rgb[i]) for i in idx[np.argsort(lab[idx, 0])])
 
 
 def _parse_colors(raw: object, name: str) -> tuple[tuple[str, Rgb], ...]:
@@ -116,7 +137,7 @@ def _parse_roles(raw: object, key: str, known: set[str], name: str) -> tuple[str
     return tuple(raw)
 
 
-def parse_theme(data: object, name: str, source: Path | None = None) -> Theme:
+def parse_theme(data: object, name: str) -> Theme:
     """Build a Theme from already-decoded JSON."""
     if not _SAFE_NAME.fullmatch(name):
         raise ValueError(
@@ -131,17 +152,24 @@ def parse_theme(data: object, name: str, source: Path | None = None) -> Theme:
         raw_colors, raw_ramp, raw_exclude = data, None, None
 
     colors = _parse_colors(raw_colors, name)
-    known = {role for role, _ in colors}
-    ramp = _parse_roles(raw_ramp, "ramp", known, name)
-    if ramp and len(ramp) < 2:
+    lookup = dict(colors)
+    known = set(lookup)
+
+    ramp_roles = _parse_roles(raw_ramp, "ramp", known, name)
+    if ramp_roles and len(ramp_roles) < 2:
         raise ValueError(f"theme {name!r}: 'ramp' needs at least two colors")
+    # Ramps resolve against every color the theme defines, including any the
+    # palette drops, since the excluded shades are exactly the neutral ones.
+    if ramp_roles:
+        ramp = tuple(lookup[role] for role in ramp_roles)
+    else:
+        ramp = derive_ramp(rgb for _, rgb in colors)
 
     return Theme(
         name=name,
         colors=colors,
-        ramp_roles=ramp,
+        ramp=ramp,
         exclude=frozenset(_parse_roles(raw_exclude, "exclude", known, name)),
-        source=source,
     )
 
 
@@ -153,7 +181,7 @@ def load_theme_file(path: Path) -> Theme:
         raise ValueError(f"no such theme file: {path}") from None
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: invalid JSON ({exc})") from None
-    return parse_theme(data, path.stem, path)
+    return parse_theme(data, path.stem)
 
 
 def user_dir() -> Path:
@@ -188,8 +216,7 @@ def get_theme(name: str = DEFAULT_THEME) -> Theme:
 
 def list_themes() -> list[tuple[str, str, Path]]:
     """[(name, "built-in" | "user", path), ...] sorted by name."""
-    builtin = {p.stem for p in BUILTIN_DIR.glob("*.json")} if BUILTIN_DIR.is_dir() else set()
     return [
-        (name, "built-in" if path.parent == BUILTIN_DIR and name in builtin else "user", path)
+        (name, "built-in" if path.parent == BUILTIN_DIR else "user", path)
         for name, path in sorted(discover().items())
     ]
