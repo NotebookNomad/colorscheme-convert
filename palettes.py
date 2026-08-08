@@ -1,195 +1,195 @@
-"""Tokyo Night palettes.
+"""Color scheme registry.
 
-Hex values follow the reference implementation of folke/tokyonight.nvim
-(the four published variants: night, storm, moon, day).
+A scheme is a JSON file. Built-ins ship in ``themes/`` beside this module; user
+schemes live in ``$XDG_CONFIG_HOME/colorscheme-convert/themes`` (by default
+``~/.config/colorscheme-convert/themes``) and shadow a built-in of the same
+name. The theme name is the file's stem, so ``my-theme.json`` is ``my-theme``.
+
+Three JSON shapes are accepted, smallest first::
+
+    ["#1a1b26", "#7aa2f7", "#c0caf5"]
+
+    {"bg": "#1a1b26", "blue": "#7aa2f7", "fg": "#c0caf5"}
+
+    {"colors": <either of the above>,
+     "ramp":    ["bg", "blue", "fg"],   optional, see Theme.ramp
+     "exclude": ["blue"]}               optional, see Theme.entries
 """
 
 from __future__ import annotations
 
-PALETTES: dict[str, dict[str, str]] = {
-    "night": {
-        "bg_dark": "#16161e",
-        "bg": "#1a1b26",
-        "bg_highlight": "#292e42",
-        "blue7": "#394b70",
-        "fg_gutter": "#3b4261",
-        "blue0": "#3d59a1",
-        "terminal_black": "#414868",
-        "dark3": "#545c7e",
-        "comment": "#565f89",
-        "dark5": "#737aa2",
-        "blue": "#7aa2f7",
-        "cyan": "#7dcfff",
-        "blue1": "#2ac3de",
-        "blue2": "#0db9d7",
-        "blue5": "#89ddff",
-        "blue6": "#b4f9f8",
-        "magenta": "#bb9af7",
-        "magenta2": "#ff007c",
-        "purple": "#9d7cd8",
-        "orange": "#ff9e64",
-        "yellow": "#e0af68",
-        "green": "#9ece6a",
-        "green1": "#73daca",
-        "green2": "#41a6b5",
-        "teal": "#1abc9c",
-        "red": "#f7768e",
-        "red1": "#db4b4b",
-        "fg_dark": "#a9b1d6",
-        "fg": "#c0caf5",
-    },
-    "storm": {
-        "bg_dark": "#1f2335",
-        "bg": "#24283b",
-        "bg_highlight": "#292e42",
-        "blue7": "#394b70",
-        "fg_gutter": "#3b4261",
-        "blue0": "#3d59a1",
-        "terminal_black": "#414868",
-        "dark3": "#545c7e",
-        "comment": "#565f89",
-        "dark5": "#737aa2",
-        "blue": "#7aa2f7",
-        "cyan": "#7dcfff",
-        "blue1": "#2ac3de",
-        "blue2": "#0db9d7",
-        "blue5": "#89ddff",
-        "blue6": "#b4f9f8",
-        "magenta": "#bb9af7",
-        "magenta2": "#ff007c",
-        "purple": "#9d7cd8",
-        "orange": "#ff9e64",
-        "yellow": "#e0af68",
-        "green": "#9ece6a",
-        "green1": "#73daca",
-        "green2": "#41a6b5",
-        "teal": "#1abc9c",
-        "red": "#f7768e",
-        "red1": "#db4b4b",
-        "fg_dark": "#a9b1d6",
-        "fg": "#c0caf5",
-    },
-    "moon": {
-        "bg_dark": "#1e2030",
-        "bg": "#222436",
-        "bg_highlight": "#2f334d",
-        "blue7": "#394b70",
-        "fg_gutter": "#3b4261",
-        "blue0": "#3e68d7",
-        "terminal_black": "#444a73",
-        "dark3": "#545c7e",
-        "comment": "#636da6",
-        "dark5": "#737aa2",
-        "blue": "#82aaff",
-        "cyan": "#86e1fc",
-        "blue1": "#65bcff",
-        "blue2": "#0db9d7",
-        "blue5": "#89ddff",
-        "blue6": "#b4f9f8",
-        "magenta": "#c099ff",
-        "magenta2": "#ff007c",
-        "purple": "#fca7ea",
-        "orange": "#ff966c",
-        "yellow": "#ffc777",
-        "green": "#c3e88d",
-        "green1": "#4fd6be",
-        "green2": "#41a6b5",
-        "teal": "#4fd6be",
-        "red": "#ff757f",
-        "red1": "#c53b53",
-        "fg_dark": "#828bb8",
-        "fg": "#c8d3f5",
-    },
-    "day": {
-        "bg_dark": "#d0d5e3",
-        "bg": "#e1e2e7",
-        "bg_highlight": "#c4c8da",
-        "blue7": "#92a6d5",
-        "fg_gutter": "#a8aecb",
-        "blue0": "#7890dd",
-        "terminal_black": "#a1a6c5",
-        "dark3": "#8990b3",
-        "comment": "#848cb5",
-        "dark5": "#68709a",
-        "blue": "#2e7de9",
-        "cyan": "#007197",
-        "blue1": "#188092",
-        "blue2": "#07879d",
-        "blue5": "#006a83",
-        "blue6": "#2e5857",
-        "magenta": "#9854f1",
-        "magenta2": "#d20065",
-        "purple": "#7847bd",
-        "orange": "#b15c00",
-        "yellow": "#8c6c3e",
-        "green": "#587539",
-        "green1": "#387068",
-        "green2": "#325b64",
-        "teal": "#118c74",
-        "red": "#f52a65",
-        "red1": "#c64343",
-        "fg_dark": "#6172b0",
-        "fg": "#3760bf",
-    },
-}
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
-DEFAULT_VARIANT = "night"
+DEFAULT_THEME = "tokyonight-night"
 
-# Roles that are pure UI chrome and rarely help as image colors: they sit very
-# close to other entries and only add banding when mapping photographic input.
-_CHROME_ROLES = ("bg_highlight", "fg_gutter", "terminal_black", "dark3", "dark5")
+BUILTIN_DIR = Path(__file__).resolve().parent / "themes"
+
+# Theme names become part of an output filename, so keep them to boring
+# characters — no directory separators, no leading dot or dash, so a name can
+# neither reach into another directory nor be mistaken for a CLI flag.
+_SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+Rgb = tuple[int, int, int]
 
 
-def hex_to_rgb(value: str) -> tuple[int, int, int]:
-    value = value.lstrip("#")
-    if len(value) == 3:
-        value = "".join(ch * 2 for ch in value)
-    if len(value) != 6:
-        raise ValueError(f"not a hex color: #{value}")
-    return tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+def hex_to_rgb(value: str) -> Rgb:
+    if not isinstance(value, str):
+        raise ValueError(f"not a hex color: {value!r}")
+    text = value.lstrip("#")
+    if len(text) == 3:
+        text = "".join(ch * 2 for ch in text)
+    if len(text) != 6 or not all(ch in "0123456789abcdefABCDEF" for ch in text):
+        raise ValueError(f"not a hex color: {value!r}")
+    return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
 
 
-def rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+def rgb_to_hex(rgb: Rgb) -> str:
     return "#%02x%02x%02x" % tuple(int(c) for c in rgb)
 
 
-# The scheme's neutral spine, darkest to lightest. Gradient-mapping onto these
-# reads as Tokyo Night; mapping onto the accent colors just makes a rainbow.
-RAMP_ROLES = (
-    "bg_dark",
-    "bg",
-    "bg_highlight",
-    "blue7",
-    "fg_gutter",
-    "terminal_black",
-    "dark3",
-    "comment",
-    "dark5",
-    "fg_dark",
-    "fg",
-)
+@dataclass(frozen=True)
+class Theme:
+    """A named set of colors, plus optional hints about how to use them."""
+
+    name: str
+    colors: tuple[tuple[str, Rgb], ...]
+    ramp_roles: tuple[str, ...]
+    exclude: frozenset[str]
+    source: Path | None = None
+
+    def entries(self, *, full: bool = False) -> list[tuple[str, Rgb]]:
+        """Colors to map against, as [(role, rgb), ...].
+
+        A theme's ``exclude`` list names colors that sit so close to another
+        entry that keeping them only adds banding on photographic input; they
+        are dropped unless ``full`` is set.
+        """
+        if full or not self.exclude:
+            return list(self.colors)
+        return [(role, rgb) for role, rgb in self.colors if role not in self.exclude]
+
+    def ramp(self) -> list[Rgb] | None:
+        """The dark-to-light neutral spine for gradient mapping.
+
+        ``None`` when the theme declares no ramp, in which case the caller
+        derives one from the colors themselves.
+        """
+        if not self.ramp_roles:
+            return None
+        lookup = dict(self.colors)
+        return [lookup[role] for role in self.ramp_roles]
 
 
-def get_palette(variant: str = DEFAULT_VARIANT, *, full: bool = False) -> list[tuple[str, tuple[int, int, int]]]:
-    """Return [(role, (r, g, b)), ...] for a variant.
+def _parse_colors(raw: object, name: str) -> tuple[tuple[str, Rgb], ...]:
+    if isinstance(raw, list):
+        pairs = [(str(i), value) for i, value in enumerate(raw)]
+    elif isinstance(raw, dict):
+        pairs = list(raw.items())
+    else:
+        raise ValueError(f"theme {name!r}: 'colors' must be a list or an object")
+    if not pairs:
+        raise ValueError(f"theme {name!r}: no colors")
 
-    With ``full=False`` the near-duplicate chrome shades are dropped, which
-    gives cleaner results on photographs.
-    """
+    out = []
+    for role, value in pairs:
+        try:
+            out.append((str(role), hex_to_rgb(value)))
+        except ValueError as exc:
+            raise ValueError(f"theme {name!r}, color {role!r}: {exc}") from None
+    return tuple(out)
+
+
+def _parse_roles(raw: object, key: str, known: set[str], name: str) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(r, str) for r in raw):
+        raise ValueError(f"theme {name!r}: {key!r} must be a list of color names")
+    unknown = [r for r in raw if r not in known]
+    if unknown:
+        raise ValueError(
+            f"theme {name!r}: {key!r} names colors that do not exist: {', '.join(unknown)}"
+        )
+    return tuple(raw)
+
+
+def parse_theme(data: object, name: str, source: Path | None = None) -> Theme:
+    """Build a Theme from already-decoded JSON."""
+    if not _SAFE_NAME.fullmatch(name):
+        raise ValueError(
+            f"theme name {name!r} must start with a letter or digit and contain "
+            "only letters, digits, dot, dash or underscore"
+        )
+
+    if isinstance(data, dict) and "colors" in data:
+        raw_colors, raw_ramp, raw_exclude = data["colors"], data.get("ramp"), data.get("exclude")
+    else:
+        # Bare list of colors, or a bare {role: hex} object.
+        raw_colors, raw_ramp, raw_exclude = data, None, None
+
+    colors = _parse_colors(raw_colors, name)
+    known = {role for role, _ in colors}
+    ramp = _parse_roles(raw_ramp, "ramp", known, name)
+    if ramp and len(ramp) < 2:
+        raise ValueError(f"theme {name!r}: 'ramp' needs at least two colors")
+
+    return Theme(
+        name=name,
+        colors=colors,
+        ramp_roles=ramp,
+        exclude=frozenset(_parse_roles(raw_exclude, "exclude", known, name)),
+        source=source,
+    )
+
+
+def load_theme_file(path: Path) -> Theme:
+    """Load a theme from an explicit JSON file. Its name is the file stem."""
     try:
-        scheme = PALETTES[variant]
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        raise ValueError(f"no such theme file: {path}") from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON ({exc})") from None
+    return parse_theme(data, path.stem, path)
+
+
+def user_dir() -> Path:
+    root = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(root) if root else Path.home() / ".config"
+    return base / "colorscheme-convert" / "themes"
+
+
+def discover() -> dict[str, Path]:
+    """Map theme name -> file. User themes shadow built-ins of the same name."""
+    found: dict[str, Path] = {}
+    for directory in (BUILTIN_DIR, user_dir()):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.json")):
+            if _SAFE_NAME.fullmatch(path.stem):
+                found[path.stem] = path
+    return found
+
+
+def get_theme(name: str = DEFAULT_THEME) -> Theme:
+    """Load a theme by name from the built-in and user directories."""
+    available = discover()
+    try:
+        path = available[name]
     except KeyError:
         raise ValueError(
-            f"unknown variant {variant!r}; choose from: {', '.join(PALETTES)}"
+            f"unknown theme {name!r}; available: {', '.join(sorted(available))}"
         ) from None
+    return load_theme_file(path)
+
+
+def list_themes() -> list[tuple[str, str, Path]]:
+    """[(name, "built-in" | "user", path), ...] sorted by name."""
+    builtin = {p.stem for p in BUILTIN_DIR.glob("*.json")} if BUILTIN_DIR.is_dir() else set()
     return [
-        (role, hex_to_rgb(hexval))
-        for role, hexval in scheme.items()
-        if full or role not in _CHROME_ROLES
+        (name, "built-in" if path.parent == BUILTIN_DIR and name in builtin else "user", path)
+        for name, path in sorted(discover().items())
     ]
-
-
-def get_ramp(variant: str = DEFAULT_VARIANT) -> list[tuple[int, int, int]]:
-    """The neutral dark-to-light ramp for gradient mapping."""
-    scheme = dict(get_palette(variant, full=True))
-    return [scheme[role] for role in RAMP_ROLES]

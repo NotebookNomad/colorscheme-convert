@@ -17,7 +17,15 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from palettes import DEFAULT_VARIANT, PALETTES, get_palette, get_ramp, rgb_to_hex
+from palettes import (
+    DEFAULT_THEME,
+    Theme,
+    get_theme,
+    list_themes,
+    load_theme_file,
+    rgb_to_hex,
+    user_dir,
+)
 
 METHODS = ("nearest", "blend", "gradient")
 DITHERS = ("none", "bayer", "floyd")
@@ -294,8 +302,42 @@ def palette_swatch(pal_rgb: np.ndarray, cell: int = 64) -> Image.Image:
     return Image.fromarray(np.repeat(np.repeat(grid, cell, 0), cell, 1), "RGB")
 
 
-def default_output(path: Path, variant: str) -> Path:
-    return path.with_name(f"{path.stem}-tokyonight-{variant}.png")
+def derive_ramp(pal_rgb: np.ndarray) -> np.ndarray:
+    """Pick a neutral dark-to-light spine out of an arbitrary palette.
+
+    Gradient mapping wants low-chroma colors — run it over a theme's accents
+    and you get rainbow banding. Themes may declare a ``ramp`` explicitly; this
+    is the fallback for those that don't.
+    """
+    lab = oklab_from_u8(pal_rgb)
+    chroma = np.hypot(lab[:, 1], lab[:, 2])
+    keep = chroma <= max(0.04, float(np.median(chroma)) * 0.6)
+    if keep.sum() < 3:
+        # Palette has no real neutrals; take the least saturated colors anyway.
+        keep = np.zeros(len(lab), dtype=bool)
+        keep[np.argsort(chroma)[:5]] = True
+    idx = np.flatnonzero(keep)
+    return pal_rgb[idx[np.argsort(lab[idx, 0])]]
+
+
+def resolve_palette(
+    theme: Theme, *, full: bool = False, ramp: str = "neutral"
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Turn a Theme into the (palette, ramp) uint8 arrays the pipeline wants."""
+    pal_rgb = np.array([rgb for _, rgb in theme.entries(full=full)], dtype=np.uint8)
+    if ramp == "all":
+        return pal_rgb, None
+    # Ramps resolve against every color the theme defines, including any the
+    # palette drops, since the excluded shades are exactly the neutral ones.
+    declared = theme.ramp()
+    if declared is not None:
+        return pal_rgb, np.array(declared, dtype=np.uint8)
+    all_rgb = np.array([rgb for _, rgb in theme.colors], dtype=np.uint8)
+    return pal_rgb, derive_ramp(all_rgb)
+
+
+def default_output(path: Path, theme: str) -> Path:
+    return path.with_name(f"{path.stem}-{theme}.png")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -307,17 +349,34 @@ def build_parser() -> argparse.ArgumentParser:
             "examples:\n"
             "  ./convert.py wallpaper.png\n"
             "  ./convert.py photo.png -m blend -k 0.5 -o out.png\n"
-            "  ./convert.py pixelart.png -d floyd --variant moon\n"
-            "  ./convert.py --show-palette storm\n"
+            "  ./convert.py pixelart.png -d floyd -t gruvbox-dark\n"
+            "  ./convert.py photo.png --theme-file ~/my-palette.json\n"
+            "  ./convert.py --list-themes\n"
+            "  ./convert.py --show-palette -t nord\n"
         ),
     )
     p.add_argument("images", nargs="*", type=Path, help="input image(s)")
     p.add_argument("-o", "--output", type=Path, help="output path (single input only)")
     p.add_argument(
+        "-t",
+        "--theme",
         "--variant",
-        default=DEFAULT_VARIANT,
-        choices=sorted(PALETTES),
-        help=f"Tokyo Night variant (default: {DEFAULT_VARIANT})",
+        dest="theme",
+        default=DEFAULT_THEME,
+        metavar="NAME",
+        help=f"color scheme to map onto; --list-themes shows all "
+        f"(default: {DEFAULT_THEME})",
+    )
+    p.add_argument(
+        "--theme-file",
+        type=Path,
+        metavar="PATH",
+        help="load a scheme from a JSON file instead of by name",
+    )
+    p.add_argument(
+        "--list-themes",
+        action="store_true",
+        help="list available schemes and where they come from, then exit",
     )
     p.add_argument(
         "-m",
@@ -388,11 +447,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--show-palette",
-        nargs="?",
-        const=DEFAULT_VARIANT,
-        choices=sorted(PALETTES),
-        metavar="VARIANT",
-        help="print the palette (and write swatch.png) instead of converting",
+        action="store_true",
+        help="print the selected scheme (and write a swatch png) instead of "
+        "converting",
     )
     return p
 
@@ -401,17 +458,29 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.list_themes:
+        for name, origin, path in list_themes():
+            marker = " (default)" if name == DEFAULT_THEME else ""
+            print(f"{name:<20} {origin:<9} {path}{marker}")
+        print(f"\ndrop your own .json schemes in {user_dir()}")
+        return 0
+
+    try:
+        theme = load_theme_file(args.theme_file) if args.theme_file else get_theme(args.theme)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.show_palette:
-        entries = get_palette(args.show_palette, full=args.full_palette)
+        entries = theme.entries(full=args.full_palette)
         for role, rgb in entries:
             print(f"{role:>15}  {rgb_to_hex(rgb)}  {rgb}")
-        out = Path(f"swatch-{args.show_palette}.png")
+        out = Path(f"swatch-{theme.name}.png")
         palette_swatch(np.array([rgb for _, rgb in entries], dtype=np.uint8)).save(out)
         print(f"\n{len(entries)} colors -> {out}")
         return 0
 
     if not args.images:
-        parser.error("no input images (or use --show-palette)")
+        parser.error("no input images (or use --show-palette / --list-themes)")
     if args.output and len(args.images) > 1:
         parser.error("--output takes a single input image")
     if not 0.0 <= args.keep_lightness <= 1.0:
@@ -421,11 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dither != "none" and args.method != "nearest":
         parser.error(f"--dither {args.dither} only applies to --method nearest")
 
-    pal_rgb = np.array(
-        [rgb for _, rgb in get_palette(args.variant, full=args.full_palette)],
-        dtype=np.uint8,
-    )
-    ramp_rgb = None if args.ramp == "all" else np.array(get_ramp(args.variant), dtype=np.uint8)
+    pal_rgb, ramp_rgb = resolve_palette(theme, full=args.full_palette, ramp=args.ramp)
 
     for path in args.images:
         if not path.is_file():
@@ -445,9 +510,9 @@ def main(argv: list[str] | None = None) -> int:
                 brightness=args.brightness,
                 normalize=args.normalize,
             )
-        dest = args.output or default_output(path, args.variant)
+        dest = args.output or default_output(path, theme.name)
         out_img.save(dest)
-        print(f"{path} -> {dest}  [{args.variant}/{args.method}"
+        print(f"{path} -> {dest}  [{theme.name}/{args.method}"
               f"{'/' + args.dither if args.dither != 'none' else ''}]")
 
     return 0
