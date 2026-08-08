@@ -189,6 +189,18 @@ def floyd_steinberg(rgb8: np.ndarray, pal_rgb8: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def apply_brightness(t: np.ndarray, brightness: float) -> np.ndarray:
+    """Bend a 0..1 lightness ramp. Below 1.0 darkens, above 1.0 lightens.
+
+    Applied to lightness *before* palette matching, so it steers which palette
+    entries get picked rather than washing out the result afterwards. The
+    endpoints stay put, so the full tonal range is still used.
+    """
+    if brightness == 1.0:
+        return t
+    return t ** (1.0 / brightness)
+
+
 def convert_array(
     rgb8: np.ndarray,
     pal_rgb: np.ndarray,
@@ -199,6 +211,7 @@ def convert_array(
     chroma_weight: float = 1.0,
     softness: float = 0.10,
     keep_lightness: float = 0.0,
+    brightness: float = 1.0,
     normalize: bool = True,
 ) -> np.ndarray:
     """Recolor an (H, W, 3) uint8 array. Returns the same shape/dtype."""
@@ -208,6 +221,8 @@ def convert_array(
         raise ValueError(f"unknown dither {dither!r}; choose from: {', '.join(DITHERS)}")
     if dither != "none" and method != "nearest":
         raise ValueError(f"dither {dither!r} only applies to method 'nearest'")
+    if brightness <= 0.0:
+        raise ValueError(f"brightness must be greater than 0, got {brightness}")
 
     h, w, _ = rgb8.shape
     pal_lab = oklab_from_u8(pal_rgb)
@@ -225,7 +240,10 @@ def convert_array(
         p1, p99 = np.percentile(lab[:, 0], [1.0, 99.0])
         if p99 - p1 > 1e-6:
             lo, hi = target_lab[:, 0].min(), target_lab[:, 0].max()
-            lab[:, 0] = np.clip((lab[:, 0] - p1) / (p99 - p1), 0.0, 1.0) * (hi - lo) + lo
+            t = np.clip((lab[:, 0] - p1) / (p99 - p1), 0.0, 1.0)
+            lab[:, 0] = apply_brightness(t, brightness) * (hi - lo) + lo
+    elif brightness != 1.0:
+        lab[:, 0] = apply_brightness(np.clip(lab[:, 0], 0.0, 1.0), brightness)
 
     if dither == "floyd":
         # Error diffusion is inherently whole-image and Pillow runs it in sRGB,
@@ -326,6 +344,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dither floyd (default: 0)",
     )
     p.add_argument(
+        "-b",
+        "--brightness",
+        type=float,
+        default=1.0,
+        metavar="B",
+        help="<1 darkens, >1 lightens; 0.6-0.8 is a good first try for output "
+        "that came out too light (default: 1.0)",
+    )
+    p.add_argument(
         "-c",
         "--chroma-weight",
         type=float,
@@ -389,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--output takes a single input image")
     if not 0.0 <= args.keep_lightness <= 1.0:
         parser.error("--keep-lightness must be between 0 and 1")
+    if args.brightness <= 0.0:
+        parser.error("--brightness must be greater than 0")
     if args.dither != "none" and args.method != "nearest":
         parser.error(f"--dither {args.dither} only applies to --method nearest")
 
@@ -413,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
                 chroma_weight=args.chroma_weight,
                 softness=args.softness,
                 keep_lightness=args.keep_lightness,
+                brightness=args.brightness,
                 normalize=args.normalize,
             )
         dest = args.output or default_output(path, args.variant)

@@ -45,6 +45,11 @@ Multiple inputs are converted in one pass (each gets an auto-named output);
   the result, restoring detail that quantizing flattened. `0.4`–`0.6` rescues
   a photo that came out too posterized. Note this pulls pixels off-palette, and
   that it has no effect under `-d floyd`, which quantizes in sRGB.
+- **`-b`, `--brightness`** — bends the tone curve before palette matching, so it
+  steers *which* palette colors get picked rather than washing out the result
+  afterwards. Below `1.0` darkens, above `1.0` lightens; `0.6`–`0.8` is the fix
+  when output comes out too light. Endpoints stay put, so the full tonal range
+  is still used.
 - **`-c`, `--chroma-weight`** — below `1.0` matches mostly on lightness (safer,
   more neutral); above `1.0` chases hue and gets more colorful.
 - **`-s`, `--softness`** (with `-m blend`) — mix radius. Smaller is punchier and
@@ -61,6 +66,9 @@ Multiple inputs are converted in one pass (each gets an auto-named output);
 ## Recipes
 
 ```sh
+# Output came out too light — darken it
+.venv/bin/python convert.py wall.png -b 0.7
+
 # Wallpaper, strictly on-palette, softened banding
 .venv/bin/python convert.py wall.png -d bayer
 
