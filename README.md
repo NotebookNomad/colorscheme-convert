@@ -148,3 +148,8 @@ Tokyo Night values follow
 [folke/tokyonight.nvim](https://github.com/folke/tokyonight.nvim); the other
 schemes were transcribed from their published palettes. They are plain JSON in
 `themes/`, so a wrong hex is a one-line fix — corrections welcome.
+
+## License
+
+[MIT](LICENSE). The bundled schemes are color values belonging to their
+respective projects; each is credited by name in `themes/`.
