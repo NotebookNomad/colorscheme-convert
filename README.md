@@ -3,6 +3,10 @@
 Recolor any image to match your terminal or editor color scheme — wallpapers,
 screenshots, diagrams. Ships with 13 schemes and reads your own from JSON.
 
+![One image converted to three color schemes](docs/demo.png)
+
+*`docs/scene.png` run through `convert.py -t <scheme> -d bayer`.*
+
 Colors are matched in [Oklab](https://bottosson.github.io/posts/oklab/), so
 "closest color" means closest as the eye sees it rather than closest in the RGB
 cube. That is the difference between a recolored image that looks right and one
