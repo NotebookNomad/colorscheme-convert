@@ -114,6 +114,10 @@ def bayer_offsets(height: int, width: int) -> np.ndarray:
 
 def palette_spacing(pal_lab: np.ndarray) -> float:
     """Median distance from each palette color to its closest neighbor."""
+    if len(pal_lab) < 2:
+        # Nothing to measure against: a single color has no neighbor, and the
+        # inf left by fill_diagonal would turn the dither offsets into NaN.
+        return 0.0
     d2 = _sq_distances(pal_lab, pal_lab, 1.0)
     np.fill_diagonal(d2, np.inf)
     return float(np.median(np.sqrt(d2.min(axis=1))))
@@ -121,9 +125,16 @@ def palette_spacing(pal_lab: np.ndarray) -> float:
 
 def floyd_steinberg(rgb8: np.ndarray, pal_rgb8: np.ndarray) -> np.ndarray:
     """Error-diffusion dither via Pillow's C implementation (sRGB space)."""
+    if len(pal_rgb8) > 256:
+        raise ValueError(
+            f"dither 'floyd' supports at most 256 colors, got {len(pal_rgb8)}"
+        )
     flat = pal_rgb8.ravel().tolist()
     pal_img = Image.new("P", (1, 1))
-    pal_img.putpalette(flat + [0] * (768 - len(flat)))
+    # A "P" image always carries all 256 entries, and error diffusion is free to
+    # pick any of them. Pad the unused tail by repeating the last real color
+    # rather than with zeros, or the dither emits black the theme never had.
+    pal_img.putpalette(flat + flat[-3:] * ((768 - len(flat)) // 3))
     quantized = Image.fromarray(rgb8, "RGB").quantize(
         palette=pal_img, dither=Image.Dither.FLOYDSTEINBERG
     )
@@ -169,6 +180,8 @@ def convert_array(
         raise ValueError(f"dither {dither!r} only applies to method 'nearest'")
     if brightness <= 0.0:
         raise ValueError(f"brightness must be greater than 0, got {brightness}")
+    if len(pal_rgb) == 0:
+        raise ValueError("palette is empty: nothing to map onto")
 
     h, w, _ = rgb8.shape
     pal_lab = oklab_from_u8(pal_rgb)
@@ -180,6 +193,7 @@ def convert_array(
     # first — but only if it is going to be read again.
     src_lightness = lab[:, 0].copy() if keep_lightness > 0.0 else None
 
+    stretched = False
     if normalize:
         # Stretch source lightness onto the target's lightness range so a
         # bright photo does not collapse into the scheme's few light colors.
@@ -188,7 +202,10 @@ def convert_array(
             lo, hi = target_lab[:, 0].min(), target_lab[:, 0].max()
             t = np.clip((lab[:, 0] - p1) / (p99 - p1), 0.0, 1.0)
             lab[:, 0] = apply_brightness(t, brightness) * (hi - lo) + lo
-    elif brightness != 1.0:
+            stretched = True
+    # An image too flat to stretch still has to honour --brightness, so this
+    # runs whenever the branch above did not already fold it in.
+    if not stretched and brightness != 1.0:
         lab[:, 0] = apply_brightness(np.clip(lab[:, 0], 0.0, 1.0), brightness)
 
     if dither == "floyd":
@@ -232,6 +249,8 @@ def convert_image(image: Image.Image, pal_rgb: np.ndarray, **kwargs) -> Image.Im
 
 def palette_swatch(pal_rgb: np.ndarray, cell: int = 64) -> Image.Image:
     """A strip of the palette, handy for eyeballing a scheme."""
+    if len(pal_rgb) == 0:
+        raise ValueError("cannot draw a swatch for an empty palette")
     cols = min(len(pal_rgb), 8)
     rows = (len(pal_rgb) + cols - 1) // cols
     grid = np.zeros((rows * cols, 3), dtype=np.uint8)

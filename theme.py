@@ -63,7 +63,9 @@ def rgb_to_hex(rgb: Rgb) -> str:
 
 def rgb_array(colors: Iterable[Rgb]) -> np.ndarray:
     """(N, 3) uint8 — the shape every mapping function expects."""
-    return np.array(list(colors), dtype=np.uint8)
+    # An empty iterable gives numpy shape (0,), which blows up far downstream
+    # in a matmul; reshape pins the second axis so the promise above holds.
+    return np.array(list(colors), dtype=np.uint8).reshape(-1, 3)
 
 
 @dataclass(frozen=True)
@@ -165,12 +167,13 @@ def parse_theme(data: object, name: str) -> Theme:
     else:
         ramp = derive_ramp(rgb for _, rgb in colors)
 
-    return Theme(
-        name=name,
-        colors=colors,
-        ramp=ramp,
-        exclude=frozenset(_parse_roles(raw_exclude, "exclude", known, name)),
-    )
+    exclude = frozenset(_parse_roles(raw_exclude, "exclude", known, name))
+    if exclude.issuperset(role for role, _ in colors):
+        raise ValueError(
+            f"theme {name!r}: 'exclude' leaves no colors to match against"
+        )
+
+    return Theme(name=name, colors=colors, ramp=ramp, exclude=exclude)
 
 
 def load_theme_file(path: Path) -> Theme:
@@ -179,6 +182,8 @@ def load_theme_file(path: Path) -> Theme:
         data = json.loads(path.read_text())
     except FileNotFoundError:
         raise ValueError(f"no such theme file: {path}") from None
+    except OSError as exc:
+        raise ValueError(f"cannot read theme file {path}: {exc.strerror}") from None
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: invalid JSON ({exc})") from None
     return parse_theme(data, path.stem)
