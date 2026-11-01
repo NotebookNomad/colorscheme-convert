@@ -14,21 +14,30 @@ where the greens go muddy.
 
 ## Install
 
-Needs Python 3.9+.
+Needs Python 3.9+, plus [pyenv](https://github.com/pyenv/pyenv) and
+[pyenv-virtualenv](https://github.com/pyenv/pyenv-virtualenv).
 
 ```sh
 git clone https://github.com/NotebookNomad/colorscheme-convert
 cd colorscheme-convert
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+pyenv virtualenv 3.14.7 colorscheme-convert
+pyenv local colorscheme-convert
+pip install -r requirements.txt
 ```
+
+Any 3.9+ interpreter works — swap `3.14.7` for one `pyenv versions` lists.
+`pyenv local` writes a `.python-version` file holding the environment name, so
+the environment activates on its own whenever you `cd` into the repo. That file
+names an environment that only exists on your machine, so it stays out of git;
+every `python` below is the one inside it.
 
 ## Use
 
 ```sh
-.venv/bin/python convert.py wallpaper.png
+python convert.py wallpaper.png
 # -> wallpaper-tokyonight-night.png
 
-.venv/bin/python convert.py wallpaper.png -t gruvbox-dark
+python convert.py wallpaper.png -t gruvbox-dark
 # -> wallpaper-gruvbox-dark.png
 ```
 
@@ -115,16 +124,16 @@ copying one is the easiest way to start.
 
 ```sh
 # Wallpaper, on-palette, softened banding
-.venv/bin/python convert.py wall.png -d bayer
+python convert.py wall.png -d bayer
 
 # Photo that keeps its detail
-.venv/bin/python convert.py photo.png -m blend -k 0.5 -s 0.06
+python convert.py photo.png -m blend -k 0.5 -s 0.06
 
 # Pixel art
-.venv/bin/python convert.py sprite.png -d floyd -t gruvbox-dark
+python convert.py sprite.png -d floyd -t gruvbox-dark
 
 # Darker result
-.venv/bin/python convert.py wall.png -b 0.7
+python convert.py wall.png -b 0.7
 ```
 
 ## As a library

@@ -3,3 +3,4 @@ __pycache__/
 sample-*.png
 swatch-*.png
 .claude/settings.local.json
+.python-version
